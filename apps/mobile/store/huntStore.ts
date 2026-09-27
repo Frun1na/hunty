@@ -3,6 +3,7 @@
  * Persisted in SecureStore for mobile, with AsyncStorage offline cache for clues.
  */
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { ANSWER_QUEUE_KEY, notifyAnswerQueueChanged } from '@store/answerQueue';
 import * as SecureStore from 'expo-secure-store';
 import type { Clue, HuntStatus, StoredHunt } from '@hunty/types';
 import { scheduleHuntExpiryNotification } from '@utils/huntNotifications';
@@ -227,12 +228,13 @@ export async function queueClueAnswer(
   answer: string,
 ): Promise<void> {
   try {
-    const existing = await AsyncStorage.getItem('hunty_clue_queue');
+    const existing = await AsyncStorage.getItem(ANSWER_QUEUE_KEY);
     const queue = existing
       ? (JSON.parse(existing) as Array<{ huntId: number; clueId: number; answer: string }>)
       : [];
     queue.push({ huntId, clueId, answer });
-    await AsyncStorage.setItem('hunty_clue_queue', JSON.stringify(queue));
+    await AsyncStorage.setItem(ANSWER_QUEUE_KEY, JSON.stringify(queue));
+    notifyAnswerQueueChanged(queue.length);
   } catch {
     // ignore errors
   }
@@ -243,7 +245,7 @@ export async function getQueuedAnswers(): Promise<
   Array<{ huntId: number; clueId: number; answer: string }>
 > {
   try {
-    const data = await AsyncStorage.getItem('hunty_clue_queue');
+    const data = await AsyncStorage.getItem(ANSWER_QUEUE_KEY);
     return data ? JSON.parse(data) : [];
   } catch {
     return [];
@@ -257,7 +259,8 @@ export async function processQueuedAnswers(): Promise<void> {
     // TODO: integrate with server submission and update local progress
     // Placeholder: assume success and remove from queue
   }
-  await AsyncStorage.removeItem('hunty_clue_queue');
+  await AsyncStorage.removeItem(ANSWER_QUEUE_KEY);
+  notifyAnswerQueueChanged(0);
 }
 
 export async function getOfflineCachedClues(huntId: number): Promise<Clue[]> {

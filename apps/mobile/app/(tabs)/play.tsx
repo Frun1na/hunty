@@ -2,15 +2,19 @@ import { usePlayerLocation } from '@app/hooks/usePlayerLocation';
 import { ClueMarkdownRenderer } from '@components/ClueMarkdownRenderer';
 import { BackgroundLocationControl } from '@components/BackgroundLocationControl';
 import { EmptyState } from '@components/EmptyState';
+import { OfflineBanner } from '@components/OfflineBanner';
 import { QRScanner } from '@components/QRScanner';
+import { QueuedAnswersBanner } from '@components/QueuedAnswersBanner';
 import { ThemedButton, ThemedCustomText, ThemedView } from '@components/themed';
 import { useHaptics } from '@hooks/useHaptics';
+import { useQueuedAnswerCount } from '@hooks/useQueuedAnswerCount';
 import { matchesClueAnswer } from '@lib/clueAnswerVerification';
 import { verifyQrAgainstClue } from '@lib/qrCodeDecryptor';
 import type { Clue } from '@lib/types';
 import { useTheme } from '@providers/ThemeProvider';
 import { useToast } from '@providers/ToastProvider';
-import { getHuntClues } from '@store/huntStore';
+import NetInfo from '@react-native-community/netinfo';
+import { getHuntClues, queueClueAnswer } from '@store/huntStore';
 import { usePlayerStore, useWalletStore } from '@store/useStore';
 import { useRouter } from 'expo-router';
 import { useEffect, useMemo, useState } from 'react';
@@ -24,10 +28,12 @@ export default function PlayScreen() {
   const [isOnline, setIsOnline] = useState(true);
   useEffect(() => {
     const unsubscribe = NetInfo.addEventListener((state) => {
-      setIsOnline(state.isConnected && state.isInternetReachable);
+      // isInternetReachable is null while unknown; only treat false as offline.
+      setIsOnline(Boolean(state.isConnected) && state.isInternetReachable !== false);
     });
     return () => unsubscribe();
   }, []);
+  const queuedAnswerCount = useQueuedAnswerCount();
 
   const router = useRouter();
   const { colors } = useTheme();
@@ -98,7 +104,7 @@ export default function PlayScreen() {
 
     // If offline, queue the answer and update progress locally
     if (!isOnline) {
-      await queueClueAnswer(currentProgress.hunt_id, activeClue.id, answer.trim());
+      await queueClueAnswer(currentProgress.hunt_id, activeClue.id, submittedAnswer.trim());
       // Mark clue completed locally
       markClueCompleted(currentProgress.hunt_id, activeClueIndex);
       // Advance to next clue
@@ -182,6 +188,12 @@ export default function PlayScreen() {
   return (
     <ThemedView style={[styles.container, { backgroundColor: colors.background }]}>
       <ScrollView contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
+        {queuedAnswerCount > 0 ? (
+          <QueuedAnswersBanner count={queuedAnswerCount} isOnline={isOnline} />
+        ) : !isOnline ? (
+          <OfflineBanner />
+        ) : null}
+
         <View
           style={[
             styles.heroCard,
@@ -276,7 +288,6 @@ export default function PlayScreen() {
 
         {!allSolved && activeClue ? (
           <>
-            <OfflineBanner />
             <View
               style={[
                 styles.answerPanel,
