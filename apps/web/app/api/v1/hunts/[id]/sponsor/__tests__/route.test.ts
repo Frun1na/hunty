@@ -29,6 +29,7 @@ vi.mock("@/lib/contracts/rewardManager", () => ({
 vi.mock("@/lib/rate-limit", () => ({
   getIP: vi.fn(),
   rateLimit: vi.fn(async () => ({ success: true, reset: undefined })),
+  rateLimitPresets: { read: {}, write: {}, sensitive: {} },
   rateLimitResponse: vi.fn(),
 }));
 

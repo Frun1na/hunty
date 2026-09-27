@@ -106,16 +106,35 @@ describe('useQueuedAnswerCount with the real huntStore queue', () => {
     await waitFor(() => expect(result.current).toBe(0));
 
     await act(async () => {
-      await queueClueAnswer(7, 1, 'first');
-      await queueClueAnswer(7, 2, 'second');
+      await queueClueAnswer(7, 1, 'first', 'G'.repeat(56));
+      await queueClueAnswer(7, 2, 'second', 'G'.repeat(56));
     });
     expect(result.current).toBe(2);
     await expect(getQueuedAnswerCount()).resolves.toBe(2);
 
+    global.fetch = jest.fn().mockResolvedValue({ ok: true });
     await act(async () => {
       await processQueuedAnswers();
     });
     expect(result.current).toBe(0);
     await expect(getQueuedAnswerCount()).resolves.toBe(0);
+  });
+
+  it('keeps counting answers that failed to submit', async () => {
+    const { queueClueAnswer, processQueuedAnswers } = require('@store/huntStore');
+    const { result } = renderHook(() => useQueuedAnswerCount());
+    await waitFor(() => expect(result.current).toBe(0));
+
+    await act(async () => {
+      await queueClueAnswer(7, 1, 'first', 'G'.repeat(56));
+    });
+    expect(result.current).toBe(1);
+
+    global.fetch = jest.fn().mockRejectedValue(new Error('offline'));
+    await act(async () => {
+      await processQueuedAnswers();
+    });
+    expect(result.current).toBe(1);
+    await expect(getQueuedAnswerCount()).resolves.toBe(1);
   });
 });

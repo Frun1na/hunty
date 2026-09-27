@@ -39,7 +39,7 @@ export default function PlayScreen() {
   const { colors } = useTheme();
   const haptics = useHaptics();
   const { showToast } = useToast();
-  const { network } = useWalletStore();
+  const { network, walletAddress } = useWalletStore();
   const {
     location,
     error: locationError,
@@ -104,7 +104,12 @@ export default function PlayScreen() {
 
     // If offline, queue the answer and update progress locally
     if (!isOnline) {
-      await queueClueAnswer(currentProgress.hunt_id, activeClue.id, submittedAnswer.trim());
+      await queueClueAnswer(
+        currentProgress.hunt_id,
+        activeClue.id,
+        submittedAnswer.trim(),
+        walletAddress,
+      );
       // Mark clue completed locally
       markClueCompleted(currentProgress.hunt_id, activeClueIndex);
       // Advance to next clue
