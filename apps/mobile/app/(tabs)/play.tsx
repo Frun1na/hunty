@@ -203,7 +203,9 @@ export default function PlayScreen() {
           <ThemedCustomText variant="h2" color="primary" weight="800">
             Active Hunt Session
           </ThemedCustomText>
-          <ThemedCustomText variant="body">{progressLabel}</ThemedCustomText>
+          <ThemedCustomText variant="body" testID="play-progress-label">
+            {progressLabel}
+          </ThemedCustomText>
         </View>
 
         <View
@@ -315,7 +317,7 @@ export default function PlayScreen() {
                 autoCorrect={false}
               />
               {error ? (
-                <ThemedCustomText variant="caption" color="error">
+                <ThemedCustomText variant="caption" color="error" testID="answer-error">
                   {error}
                 </ThemedCustomText>
               ) : null}
@@ -326,6 +328,7 @@ export default function PlayScreen() {
                 onPress={handleSubmit}
               />
               <ThemedButton
+                testID="scan-qr-button"
                 text="Scan QR checkpoint"
                 variant="secondary"
                 fullWidth

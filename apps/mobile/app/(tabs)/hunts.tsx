@@ -168,6 +168,7 @@ export default function HuntsScreen() {
                 </View>
 
                 <ThemedButton
+                  testID={`join-hunt-button-${hunt.id}`}
                   text={isCurrent ? 'View Hunt' : isLoading ? 'Joining...' : 'Join Hunt'}
                   variant={isCurrent ? 'success' : 'primary'}
                   size="md"

@@ -24,7 +24,7 @@ export default function HuntDetailScreen() {
   }
 
   return (
-    <ThemedView style={styles.container}>
+    <ThemedView style={styles.container} testID="hunt-detail-screen">
       <HuntCoverImage src={hunt.coverImageCid} alt={hunt.title} />
       <ThemedCustomText variant="h2">{hunt.title}</ThemedCustomText>
       <ThemedCustomText variant="body">{hunt.description}</ThemedCustomText>
