@@ -1,10 +1,11 @@
+/** @vitest-environment node */
 /**
  * Tests for the hunt sponsorship API endpoint
  *
  * POST /api/v1/hunts/[id]/sponsor
  */
 
-import { Keypair } from "@stellar/stellar-base";
+import { Keypair } from "@stellar/stellar-sdk";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { generateChallenge } from "@/lib/signature";
