@@ -29,6 +29,21 @@ jobs:
       - name: Lint and typecheck
         run: pnpm exec turbo run lint typecheck --filter=${{ matrix.workspace }}
 
+  # ─── Quality gate (stable name for branch-protection required check) ──
+  quality-gate:
+    name: Quality Gate
+    runs-on: ubuntu-latest
+    needs: [quality]
+    if: always()
+    steps:
+      - name: Check quality matrix result
+        run: |
+          if [ "${{ needs.quality.result }}" != "success" ]; then
+            echo "❌ Quality checks failed or were cancelled"
+            exit 1
+          fi
+          echo "✅ All quality checks passed"
+
   # ─── Workspace tests ──────────────────────────────────────────────────
   test:
     name: Tests — ${{ matrix.workspace }}
@@ -107,7 +122,7 @@ jobs:
   build:
     name: Build Verification
     runs-on: ubuntu-latest
-    needs: [quality, test]
+    needs: [quality-gate, test]
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -182,12 +197,12 @@ jobs:
   ci-summary:
     name: CI Summary
     runs-on: ubuntu-latest
-    needs: [quality, test, coverage, mutation, build, e2e, visual-regression]
+    needs: [quality-gate, test, coverage, mutation, build, e2e, visual-regression]
     if: always()
     steps:
       - name: Check CI status
         run: |
-          if [ "${{ needs.quality.result }}" = "failure" ] || \
+          if [ "${{ needs.quality-gate.result }}" = "failure" ] || \
              [ "${{ needs.test.result }}" = "failure" ] || \
              [ "${{ needs.coverage.result }}" = "failure" ] || \
              [ "${{ needs.mutation.result }}" = "failure" ] || \
