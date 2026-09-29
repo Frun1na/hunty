@@ -1,3 +1,13 @@
+//! nft-reward — Soroban smart contract for Hunty NFT rewards.
+//!
+//! # Storage discipline
+//!
+//! **All** persistent storage access is routed through `crate::storage`.
+//! No raw `symbol_short!` keys appear in this file.  See issue #848 for why
+//! this discipline matters: the owner-index layout must be encoded in exactly
+//! one place so that future changes to key prefixes or counter conventions
+//! (e.g. the prefix isolation proposed in #408) cannot silently diverge.
+
 #![no_std]
 
 mod storage;
