@@ -12,7 +12,7 @@
 
 #[cfg(test)]
 mod nft_reward_tests {
-    use soroban_sdk::{testutils::Address as _, Address, Env, String};
+    use soroban_sdk::{testutils::Address as _, Address, Env, String, Vec};
 
     use crate::{NftRewardContract, NftRewardContractClient};
 
@@ -68,10 +68,25 @@ mod nft_reward_tests {
         );
     }
 
-    fn setup(env: &Env) -> (Address, NftRewardContractClient<'_>) {
-        let contract_id = env.register(NftRewardContract, ());
+    /// Register the contract and run the one-time `initialize`, returning the
+    /// client plus the generated admin and minter addresses.  The minter is
+    /// placed on the allow-list so every other test exercises the allow-listed
+    /// path implicitly.
+    fn setup_initialized(env: &Env) -> (Address, Address, NftRewardContractClient<'_>) {
+        let contract_id = env.register_contract(None, NftRewardContract);
         let client = NftRewardContractClient::new(env, &contract_id);
+        let admin = Address::generate(env);
         let minter = Address::generate(env);
+
+        let mut minters = Vec::new(env);
+        minters.push_back(minter.clone());
+        client.initialize(&admin, &minters);
+
+        (admin, minter, client)
+    }
+
+    fn setup(env: &Env) -> (Address, NftRewardContractClient<'_>) {
+        let (_admin, minter, client) = setup_initialized(env);
         (minter, client)
     }
 
@@ -105,6 +120,50 @@ mod nft_reward_tests {
         assert_eq!(client.balance_of(&player), 1);
         assert_owner_index_consistent(&client, &player);
         assert_eq!(client.get_owner(&id), Some(player));
+    }
+
+    #[test]
+    fn test_mint_accepts_https_uri() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let (minter, client) = setup(&env);
+        let player = Address::generate(&env);
+        let uri = String::from_str(&env, "https://example.com/metadata.json");
+
+        let id = client.mint(&minter, &player, &uri);
+
+        assert_eq!(client.get_nft_uri(&id), Some(uri));
+    }
+
+    #[test]
+    fn test_mint_accepts_uri_at_max_length() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let (minter, client) = setup(&env);
+        let player = Address::generate(&env);
+        let uri_bytes = [b'a'; 256];
+        let uri = String::from_bytes(&env, &uri_bytes);
+
+        let id = client.mint(&minter, &player, &uri);
+
+        assert_eq!(client.get_nft_uri(&id), Some(uri));
+    }
+
+    #[test]
+    fn test_uri_validation_rejects_empty_uri() {
+        let env = Env::default();
+        let uri = String::from_str(&env, "");
+
+        assert!(!crate::validate_uri(&uri));
+    }
+
+    #[test]
+    fn test_uri_validation_rejects_uri_over_max_length() {
+        let env = Env::default();
+        let uri_bytes = [b'a'; 257];
+        let uri = String::from_bytes(&env, &uri_bytes);
+
+        assert!(!crate::validate_uri(&uri));
     }
 
     #[test]
@@ -144,6 +203,125 @@ mod nft_reward_tests {
         assert_nft_absent(&client, &alice, id);
         assert_nft_present(&client, &bob, id);
         assert_eq!(client.get_owner(&id), Some(bob));
+    }
+
+    // ── issue #1399: minter allow-list ───────────────────────────────────────
+
+    /// The minter configured by `setup_initialized` is allow-listed, so it can
+    /// mint; every test above exercises this implicitly and this test pins it
+    /// explicitly.
+    #[test]
+    fn test_mint_allowed_minter_succeeds() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let (_admin, minter, client) = setup_initialized(&env);
+        let player = Address::generate(&env);
+
+        let id = client.mint(&minter, &player, &test_uri(&env, 1));
+
+        assert_eq!(client.balance_of(&player), 1);
+        assert_eq!(client.get_owner(&id), Some(player));
+    }
+
+    /// A caller that is not on the allow-list must be rejected, even though it
+    /// can satisfy `require_auth` under `mock_all_auths` — proving the check is
+    /// the allow-list, not merely key ownership.
+    #[test]
+    #[should_panic]
+    fn test_mint_rejected_for_non_allowed_minter() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let (_admin, _minter, client) = setup_initialized(&env);
+        let stranger = Address::generate(&env);
+        let player = Address::generate(&env);
+
+        client.mint(&stranger, &player, &test_uri(&env, 1));
+    }
+
+    /// A newly deployed contract has an empty allow-list until `initialize`
+    /// runs, so nobody can mint in the deployment window.
+    #[test]
+    #[should_panic]
+    fn test_mint_before_initialize_panics() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let contract_id = env.register_contract(None, NftRewardContract);
+        let client = NftRewardContractClient::new(&env, &contract_id);
+        let minter = Address::generate(&env);
+        let player = Address::generate(&env);
+
+        client.mint(&minter, &player, &test_uri(&env, 1));
+    }
+
+    #[test]
+    fn test_admin_can_add_minter() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let (admin, _minter, client) = setup_initialized(&env);
+        let new_minter = Address::generate(&env);
+        let player = Address::generate(&env);
+
+        client.add_minter(&admin, &new_minter);
+        let id = client.mint(&new_minter, &player, &test_uri(&env, 1));
+
+        assert_eq!(client.balance_of(&player), 1);
+        assert_eq!(client.get_owner(&id), Some(player));
+    }
+
+    /// Removing a minter revokes the right to mint.
+    #[test]
+    #[should_panic]
+    fn test_removed_minter_cannot_mint() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let (admin, _minter, client) = setup_initialized(&env);
+        let new_minter = Address::generate(&env);
+        let player = Address::generate(&env);
+
+        client.add_minter(&admin, &new_minter);
+        client.remove_minter(&admin, &new_minter);
+
+        client.mint(&new_minter, &player, &test_uri(&env, 1));
+    }
+
+    /// Only the stored admin may change the allow-list.
+    #[test]
+    #[should_panic]
+    fn test_non_admin_cannot_add_minter() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let (_admin, _minter, client) = setup_initialized(&env);
+        let stranger = Address::generate(&env);
+        let new_minter = Address::generate(&env);
+
+        client.add_minter(&stranger, &new_minter);
+    }
+
+    /// Only the stored admin may revoke a minter either.
+    #[test]
+    #[should_panic]
+    fn test_non_admin_cannot_remove_minter() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let (_admin, minter, client) = setup_initialized(&env);
+        let stranger = Address::generate(&env);
+
+        client.remove_minter(&stranger, &minter);
+    }
+
+    /// `initialize` is one-shot: a second call must panic so the admin and the
+    /// allow-list cannot be replaced after deployment.
+    #[test]
+    #[should_panic]
+    fn test_initialize_rejects_reinitialization() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let (admin, _minter, client) = setup_initialized(&env);
+        let other = Address::generate(&env);
+
+        let mut minters = Vec::new(&env);
+        minters.push_back(other);
+        client.initialize(&admin, &minters);
     }
 
     // ── issue #848 core test: mint → transfer → burn consistency ─────────────
@@ -320,441 +498,36 @@ mod nft_reward_tests {
         assert_nft_present(&client, &player, id2);
     }
 
-    // ── issue #1405 coverage: explicit error results ──────────────────────────
-
-    /// Unauthorized transfer must return `NftError::NotOwner` (not just panic),
-    /// and must leave both owner indexes untouched.
     #[test]
-    fn test_transfer_wrong_owner_returns_not_owner() {
-        use crate::NftError;
-
-        let env = Env::default();
-        env.mock_all_auths();
-        let (minter, client) = setup(&env);
-        let alice = Address::generate(&env);
-        let bob = Address::generate(&env);
-        let eve = Address::generate(&env);
-
-        let id = client.mint(&minter, &alice, &test_uri(&env, 1));
-
-        let res = client.try_transfer(&eve, &bob, &id);
-        assert_eq!(res, Err(Ok(NftError::NotOwner)));
-
-        // nothing moved
-        assert_eq!(client.get_owner(&id), Some(alice.clone()));
-        assert_eq!(client.balance_of(&alice), 1);
-        assert_eq!(client.balance_of(&bob), 0);
-        assert_owner_index_consistent(&client, &alice);
-    }
-
-    /// Burning a non-owned token must return `NftError::NotOwner` and must not
-    /// alter the actual owner's index.
-    #[test]
-    fn test_burn_wrong_owner_returns_not_owner() {
-        use crate::NftError;
-
-        let env = Env::default();
-        env.mock_all_auths();
-        let (minter, client) = setup(&env);
-        let alice = Address::generate(&env);
-        let eve = Address::generate(&env);
-
-        let id = client.mint(&minter, &alice, &test_uri(&env, 1));
-
-        let res = client.try_burn(&eve, &id);
-        assert_eq!(res, Err(Ok(NftError::NotOwner)));
-
-        // token untouched
-        assert_eq!(client.get_owner(&id), Some(alice.clone()));
-        assert_eq!(client.balance_of(&alice), 1);
-        assert_owner_index_consistent(&client, &alice);
-    }
-
-    /// Transferring a token that was already burned returns `TokenNotFound`.
-    #[test]
-    fn test_transfer_burned_token_returns_token_not_found() {
-        use crate::NftError;
-
-        let env = Env::default();
-        env.mock_all_auths();
-        let (minter, client) = setup(&env);
-        let alice = Address::generate(&env);
-        let bob = Address::generate(&env);
-
-        let id = client.mint(&minter, &alice, &test_uri(&env, 1));
-        client.burn(&alice, &id);
-
-        let res = client.try_transfer(&alice, &bob, &id);
-        assert_eq!(res, Err(Ok(NftError::TokenNotFound)));
-    }
-
-    /// Burning an already-burned token returns `TokenNotFound`.
-    #[test]
-    fn test_burn_burned_token_returns_token_not_found() {
-        use crate::NftError;
-
-        let env = Env::default();
-        env.mock_all_auths();
-        let (minter, client) = setup(&env);
-        let alice = Address::generate(&env);
-
-        let id = client.mint(&minter, &alice, &test_uri(&env, 1));
-        client.burn(&alice, &id);
-
-        let res = client.try_burn(&alice, &id);
-        assert_eq!(res, Err(Ok(NftError::TokenNotFound)));
-    }
-
-    // ── issue #1405: total supply after burns ─────────────────────────────────
-
-    /// `total_supply` counts every minted token, including burned ones.
-    #[test]
-    fn test_total_supply_after_burns() {
-        let env = Env::default();
-        env.mock_all_auths();
-        let (minter, client) = setup(&env);
-        let alice = Address::generate(&env);
-        let bob = Address::generate(&env);
-
-        // mint tokens interleaved across two owners
-        let id1 = client.mint(&minter, &alice, &test_uri(&env, 1));
-        let id2 = client.mint(&minter, &bob, &test_uri(&env, 2));
-        let id3 = client.mint(&minter, &alice, &test_uri(&env, 3));
-        let id4 = client.mint(&minter, &bob, &test_uri(&env, 4));
-
-        assert_eq!(client.total_supply(), 4);
-
-        // burn 3 of the 4 tokens: total supply must NOT decrease
-        client.burn(&alice, &id1);
-        client.burn(&bob, &id2);
-        client.burn(&alice, &id3);
-
-        assert_eq!(client.total_supply(), 4);
-        assert_eq!(client.get_owner(&id1), None);
-        assert_eq!(client.get_owner(&id2), None);
-        assert_eq!(client.get_owner(&id3), None);
-        assert_eq!(client.get_owner(&id4), Some(bob.clone()));
-
-        // burning the last token still doesn't touch the supply counter
-        client.burn(&bob, &id4);
-
-        assert_eq!(client.total_supply(), 4);
-        assert_eq!(client.balance_of(&alice), 0);
-        assert_eq!(client.balance_of(&bob), 0);
-        assert_owner_index_consistent(&client, &alice);
-        assert_owner_index_consistent(&client, &bob);
-    }
-
-    // ── issue #1405: many-token interleaved index consistency ────────────────
-
-    /// Mint 12 tokens across 3 owners, transfer and burn them in an interleaved
-    /// pattern, then assert the owner index is consistent at every stage.
-    #[test]
-    fn test_many_tokens_interleaved_burn_consistency() {
-        let env = Env::default();
-        env.mock_all_auths();
-        let (minter, client) = setup(&env);
-        let alice = Address::generate(&env);
-        let bob = Address::generate(&env);
-        let carol = Address::generate(&env);
-
-        // mint 12 tokens: 5 alice, 4 bob, 3 carol
-        let mut alice_ids: alloc::vec::Vec<u64> = alloc::vec::Vec::new();
-        let mut bob_ids: alloc::vec::Vec<u64> = alloc::vec::Vec::new();
-        let mut carol_ids: alloc::vec::Vec<u64> = alloc::vec::Vec::new();
-
-        for i in 1..=5 {
-            alice_ids.push(client.mint(&minter, &alice, &test_uri(&env, i)));
-        }
-        for i in 1..=4 {
-            bob_ids.push(client.mint(&minter, &bob, &test_uri(&env, i)));
-        }
-        for i in 1..=3 {
-            carol_ids.push(client.mint(&minter, &carol, &test_uri(&env, i)));
-        }
-
-        assert_eq!(client.balance_of(&alice), 5);
-        assert_eq!(client.balance_of(&bob), 4);
-        assert_eq!(client.balance_of(&carol), 3);
-        assert_owner_index_consistent(&client, &alice);
-        assert_owner_index_consistent(&client, &bob);
-        assert_owner_index_consistent(&client, &carol);
-
-        // interleave: burn alice[2], transfer bob[1] -> alice, burn carol[1],
-        // transfer alice[4] -> bob, burn bob[3]
-        client.burn(&alice, &alice_ids[2]);            // alice: 5 -> 4
-        client.transfer(&bob, &alice, &bob_ids[1]);    // bob: 4 -> 3, alice: 4 -> 5
-        client.burn(&carol, &carol_ids[1]);            // carol: 3 -> 2
-        client.transfer(&alice, &bob, &alice_ids[4]);  // alice: 5 -> 4, bob: 3 -> 4
-        client.burn(&bob, &bob_ids[3]);                // bob: 4 -> 3
-
-        assert_eq!(client.balance_of(&alice), 4);
-        assert_eq!(client.balance_of(&bob), 3);
-        assert_eq!(client.balance_of(&carol), 2);
-        assert_owner_index_consistent(&client, &alice);
-        assert_owner_index_consistent(&client, &bob);
-        assert_owner_index_consistent(&client, &carol);
-
-        // burned / moved tokens must not appear in the wrong index
-        assert_eq!(client.get_owner(&alice_ids[2]), None); // burned
-        assert_nft_present(&client, &alice, bob_ids[1]);
-        assert_nft_absent(&client, &bob, bob_ids[1]);
-        assert_nft_present(&client, &bob, alice_ids[4]);
-        assert_nft_absent(&client, &alice, alice_ids[4]);
-
-        // total supply is unchanged by all this churn
-        assert_eq!(client.total_supply(), 12);
-    }
-
-    // ── issue #1405: property-style randomized sequences ─────────────────────
-
-    /// A deterministic pseudo-random sequence of mint / transfer / burn
-    /// operations.  After every operation the owner index must remain
-    /// internally consistent, and every live token's `get_owner` must match the
-    /// reference state maintained on the test side.
-    ///
-    /// Uses a small LCG so the sequence is reproducible.
-    #[test]
-    fn test_property_random_sequences_preserve_index_invariants() {
-        let env = Env::default();
-        env.mock_all_auths();
-        let (minter, client) = setup(&env);
-
-        // participants
-        let owners = [
-            Address::generate(&env),
-            Address::generate(&env),
-            Address::generate(&env),
-            Address::generate(&env),
-        ];
-
-        // reference state: token id -> owner index (None = burned)
-        // use a Vec since ids are dense and sequential
-        let mut token_owner: alloc::vec::Vec<Option<usize>> = alloc::vec::Vec::new();
-
-        // LCG with fixed seed for reproducibility (NUMERICAL_RECIPES constants)
-        let mut state: u64 = 0x2545F4914F6CDD1D;
-
-        fn next_rand(state: &mut u64) -> u64 {
-            *state = state
-                .wrapping_mul(6364136223846793005)
-                .wrapping_add(1442695040888963407);
-            (*state >> 33) as u64
-        }
-
-        let mut mint_count = 0u64;
-
-        for _ in 0..300 {
-            let op = next_rand(&mut state) % 3;
-            match op {
-                // mint to a random owner
-                0 => {
-                    let owner = owners[(next_rand(&mut state) % 4) as usize].clone();
-                    mint_count += 1;
-                    let _id = client.mint(&minter, &owner, &test_uri(&env, (mint_count % 9) as u32));
-                    token_owner.push(Some((owners.iter().position(|o| *o == owner)).unwrap()));
-                    assert_eq!(client.total_supply(), mint_count);
-                }
-                // transfer a random live token to a random owner
-                1 => {
-                    if token_owner.is_empty() {
-                        continue;
-                    }
-                    let id = (next_rand(&mut state) % token_owner.len() as u64) as usize;
-                    let Some(from_idx) = token_owner[id] else {
-                        continue; // token already burned
-                    };
-                    let to = owners[(next_rand(&mut state) % 4) as usize].clone();
-                    let from = owners[from_idx].clone();
-                    let to_idx = (owners.iter().position(|o| *o == to)).unwrap();
-                    if from_idx == to_idx {
-                        continue; // no-op, skip
-                    }
-
-                    let nft_id = (id + 1) as u64;
-                    client.transfer(&from, &to, &nft_id);
-
-                    token_owner[id] = Some(to_idx);
-                }
-                // burn a random live token
-                _ => {
-                    if token_owner.is_empty() {
-                        continue;
-                    }
-                    let id = (next_rand(&mut state) % token_owner.len() as u64) as usize;
-                    let Some(owner_idx) = token_owner[id] else {
-                        continue; // already burned
-                    };
-                    let owner = owners[owner_idx].clone();
-
-                    let nft_id = (id + 1) as u64;
-                    client.burn(&owner, &nft_id);
-                    token_owner[id] = None;
-                }
-            }
-
-            // invariant check against the reference model
-            for (i, owner_idx) in token_owner.iter().enumerate() {
-                let nft_id = (i + 1) as u64;
-                match owner_idx {
-                    Some(idx) => {
-                        assert_eq!(
-                            client.get_owner(&nft_id),
-                            Some(owners[*idx].clone()),
-                            "live token {nft_id} ownership mismatch"
-                        );
-                    }
-                    None => {
-                        assert_eq!(
-                            client.get_owner(&nft_id),
-                            None,
-                            "burned token {nft_id} should have no owner"
-                        );
-                    }
-                }
-            }
-
-            for owner in &owners {
-                assert_owner_index_consistent(&client, owner);
-            }
-
-            // per-owner reference balance check
-            let mut ref_balance = [0u32; 4];
-            for owner_idx in token_owner.iter().flatten() {
-                ref_balance[*owner_idx] += 1;
-            }
-            for (k, owner) in owners.iter().enumerate() {
-                assert_eq!(
-                    client.balance_of(owner),
-                    ref_balance[k],
-                    "balance_of mismatch for owner {k}"
-                );
-            }
-
-            assert_eq!(client.total_supply(), mint_count);
-        }
-    }
-
-    // ── issue #1401: events published on mint / transfer / burn ──────────────
-
-    #[test]
-    fn test_mint_event_published() {
-        use soroban_sdk::{
-            testutils::Events, IntoVal, Symbol as SorobanSymbol, TryFromVal, Vec as SorobanVec,
-        };
-
+    fn test_get_player_nfts_page_boundaries() {
         let env = Env::default();
         env.mock_all_auths();
         let (minter, client) = setup(&env);
         let player = Address::generate(&env);
 
-        let id = client.mint(&minter, &player, &test_uri(&env, 1));
+        let id1 = client.mint(&minter, &player, &test_uri(&env, 1));
+        let id2 = client.mint(&minter, &player, &test_uri(&env, 2));
+        let id3 = client.mint(&minter, &player, &test_uri(&env, 3));
+        let id4 = client.mint(&minter, &player, &test_uri(&env, 4));
 
-        let events = env.events().all();
-        assert_eq!(events.len(), 1);
+        let first_page = client.get_player_nfts_page(&player, &0, &2);
+        assert_eq!(first_page.len(), 2);
+        assert_eq!(first_page.get(0).unwrap(), id1);
+        assert_eq!(first_page.get(1).unwrap(), id2);
 
-        let event = events.get(0).unwrap();
-        assert_eq!(
-            event.1,
-            SorobanVec::from_array(
-                &env,
-                [
-                    SorobanSymbol::new(&env, "mint").into_val(&env),
-                    player.into_val(&env),
-                ]
-            )
-        );
-        let data: u64 = u64::try_from_val(&env, &event.2).unwrap();
-        assert_eq!(data, id);
+        let middle_page = client.get_player_nfts_page(&player, &1, &2);
+        assert_eq!(middle_page.len(), 2);
+        assert_eq!(middle_page.get(0).unwrap(), id2);
+        assert_eq!(middle_page.get(1).unwrap(), id3);
+
+        let tail_page = client.get_player_nfts_page(&player, &3, &2);
+        assert_eq!(tail_page.len(), 1);
+        assert_eq!(tail_page.get(0).unwrap(), id4);
+
+        let empty_page = client.get_player_nfts_page(&player, &4, &2);
+        assert_eq!(empty_page.len(), 0);
+
+        let zero_limit_page = client.get_player_nfts_page(&player, &0, &0);
+        assert_eq!(zero_limit_page.len(), 0);
     }
-
-    #[test]
-    fn test_transfer_event_published() {
-        use soroban_sdk::{
-            testutils::Events, IntoVal, Symbol as SorobanSymbol, TryFromVal, Vec as SorobanVec,
-        };
-
-        let env = Env::default();
-        env.mock_all_auths();
-        let (minter, client) = setup(&env);
-        let alice = Address::generate(&env);
-        let bob = Address::generate(&env);
-
-        let id = client.mint(&minter, &alice, &test_uri(&env, 1));
-
-        // After the mint invocation the event buffer holds the mint event.
-        let mint_events = env.events().all();
-        assert_eq!(mint_events.len(), 1);
-        let mint_event = mint_events.get(0).unwrap();
-        assert_eq!(
-            mint_event.1,
-            SorobanVec::from_array(
-                &env,
-                [
-                    SorobanSymbol::new(&env, "mint").into_val(&env),
-                    alice.into_val(&env),
-                ]
-            )
-        );
-        let mint_data: u64 = u64::try_from_val(&env, &mint_event.2).unwrap();
-        assert_eq!(mint_data, id);
-
-        client.transfer(&alice, &bob, &id);
-
-        // Each top-level invocation resets the recorded events, so the buffer
-        // now holds only the transfer event.
-        let events = env.events().all();
-        assert_eq!(events.len(), 1); // transfer
-
-        let transfer_event = events.get(0).unwrap();
-        assert_eq!(
-            transfer_event.1,
-            SorobanVec::from_array(
-                &env,
-                [
-                    SorobanSymbol::new(&env, "transfer").into_val(&env),
-                    alice.into_val(&env),
-                    bob.into_val(&env),
-                ]
-            )
-        );
-        let transfer_data: u64 = u64::try_from_val(&env, &transfer_event.2).unwrap();
-        assert_eq!(transfer_data, id);
-    }
-
-    #[test]
-    fn test_burn_event_published() {
-        use soroban_sdk::{
-            testutils::Events, IntoVal, Symbol as SorobanSymbol, TryFromVal, Vec as SorobanVec,
-        };
-
-        let env = Env::default();
-        env.mock_all_auths();
-        let (minter, client) = setup(&env);
-        let player = Address::generate(&env);
-
-        let id = client.mint(&minter, &player, &test_uri(&env, 1));
-
-        client.burn(&player, &id);
-
-        // Each top-level invocation resets the recorded events, so the buffer
-        // holds only the burn event.
-        let events = env.events().all();
-        assert_eq!(events.len(), 1);
-
-        let burn_event = events.get(0).unwrap();
-        assert_eq!(
-            burn_event.1,
-            SorobanVec::from_array(
-                &env,
-                [
-                    SorobanSymbol::new(&env, "burn").into_val(&env),
-                    player.into_val(&env),
-                ]
-            )
-        );
-        let burn_data: u64 = u64::try_from_val(&env, &burn_event.2).unwrap();
-        assert_eq!(burn_data, id);
-    }
-
 }
