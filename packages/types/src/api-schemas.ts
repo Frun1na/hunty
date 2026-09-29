@@ -387,6 +387,26 @@ export const presenceQuerySchema = z.object({
   staleMs: z.number().int().positive().optional().default(30000),
 })
 
+// ─── v1 / Hunts / [id] / Analytics / Clues ──────────────────────────────────
+
+export const clueAnalyticsQuerySchema = z.object({
+  /**
+   * Solve-rate percentage (0–100) below which a clue is flagged as an
+   * abandonment point. Defaults to 40 (i.e. fewer than 40 % of unique
+   * players solved the clue).
+   */
+  threshold: z
+    .string()
+    .optional()
+    .transform((v) => (v !== undefined ? Number(v) : 40))
+    .pipe(
+      z
+        .number()
+        .min(0, { message: "threshold must be ≥ 0" })
+        .max(100, { message: "threshold must be ≤ 100" }),
+    ),
+})
+
 // ─── v1 / Hunts / [id] / Progress ────────────────────────────────────────────
 
 export const huntProgressBodySchema = z.object({
