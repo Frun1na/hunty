@@ -1,94 +1,75 @@
 #!/usr/bin/env node
 /**
- * Fast syntax-only parse check for TypeScript / TSX files.
+ * Report TypeScript/TSX source files that fail to parse.
  *
- * Used by lint-staged in the pre-commit hook to catch files that no longer
- * parse (e.g. literal "\n" escapes pasted into source, merge-conflict debris)
- * before they are committed. It only runs the TypeScript parser — no type
- * checking and no module resolution — so it takes milliseconds per file.
+ * A file that cannot be parsed cannot be type-checked, linted, or bundled, so
+ * syntax errors are surfaced separately from type errors and are meant to be
+ * fixed first. Exits with code 1 when any file fails to parse.
  *
- * Usage: node scripts/check-ts-parse.mjs <file> [file...]
- * Exits 1 and prints file:line:col diagnostics if any file fails to parse.
+ * Usage:
+ *   node scripts/check-ts-parse.mjs
  */
-import { readFileSync } from "node:fs";
+import fs from "node:fs";
 import path from "node:path";
-import { pathToFileURL } from "node:url";
-
+import { fileURLToPath } from "node:url";
 import ts from "typescript";
 
-const TS_FILE = /\.(c|m)?tsx?$/;
+const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+const IGNORED_DIRS = new Set([
+  "node_modules",
+  ".git",
+  ".next",
+  "dist",
+  "build",
+  "coverage",
+  ".turbo",
+]);
+const SOURCE_RE = /\.(ts|tsx|mts|cts)$/;
 
-/**
- * Parses each file and returns one entry per syntax error.
- * @param {string[]} files
- * @returns {{ file: string, line: number, column: number, message: string }[]}
- */
-export function findParseErrors(files) {
-  const errors = [];
-  const readable = [];
-
-  for (const file of files) {
-    if (!TS_FILE.test(file)) continue;
-    try {
-      readFileSync(file);
-      readable.push(file);
-    } catch (error) {
-      errors.push({ file, line: 0, column: 0, message: `Cannot read file: ${error.message}` });
-    }
-  }
-
-  if (readable.length === 0) return errors;
-
-  // noResolve + noLib keep the program to exactly the given files, and we only
-  // ask for syntactic diagnostics, so no type checking ever runs.
-  const program = ts.createProgram(readable, {
-    noResolve: true,
-    noLib: true,
-    types: [],
-    allowJs: false,
-    jsx: ts.JsxEmit.Preserve,
-    target: ts.ScriptTarget.ESNext,
-    module: ts.ModuleKind.ESNext,
-  });
-
-  for (const file of readable) {
-    const sourceFile = program.getSourceFile(file);
-    if (!sourceFile) {
-      errors.push({ file, line: 0, column: 0, message: "Could not be parsed" });
-      continue;
-    }
-
-    for (const diagnostic of program.getSyntacticDiagnostics(sourceFile)) {
-      const message = ts.flattenDiagnosticMessageText(diagnostic.messageText, "\n");
-      if (diagnostic.start !== undefined) {
-        const { line, character } = sourceFile.getLineAndCharacterOfPosition(diagnostic.start);
-        errors.push({ file, line: line + 1, column: character + 1, message });
-      } else {
-        errors.push({ file, line: 0, column: 0, message });
-      }
+function collectSourceFiles(dir) {
+  const results = [];
+  for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+    if (entry.isDirectory()) {
+      if (IGNORED_DIRS.has(entry.name)) continue;
+      results.push(...collectSourceFiles(path.join(dir, entry.name)));
+    } else if (entry.isFile() && SOURCE_RE.test(entry.name)) {
+      results.push(path.join(dir, entry.name));
     }
   }
 
   return errors;
 }
 
-function main(argv) {
-  const files = argv.filter((arg) => !arg.startsWith("-"));
-  const errors = findParseErrors(files);
+function scriptKind(file) {
+  return file.endsWith(".tsx") ? ts.ScriptKind.TSX : ts.ScriptKind.TS;
+}
 
-  if (errors.length === 0) return 0;
+const files = collectSourceFiles(ROOT);
+let failing = 0;
 
-  for (const { file, line, column, message } of errors) {
-    const location = line > 0 ? `${line}:${column}` : "";
-    console.error(`${path.relative(process.cwd(), file)}:${location} ${message}`);
-  }
-  const fileCount = new Set(errors.map((e) => e.file)).size;
-  console.error(
-    `\n✖ ${errors.length} parse error(s) in ${fileCount} file(s). Fix them before committing.`
+for (const file of files) {
+  const text = fs.readFileSync(file, "utf8");
+  const sourceFile = ts.createSourceFile(
+    file,
+    text,
+    ts.ScriptTarget.Latest,
+    true,
+    scriptKind(file)
   );
-  return 1;
+  const diagnostics = sourceFile.parseDiagnostics ?? [];
+  if (diagnostics.length === 0) continue;
+
+  failing += 1;
+  for (const diagnostic of diagnostics) {
+    const { line, character } = sourceFile.getLineAndCharacterOfPosition(diagnostic.start);
+    const message = ts.flattenDiagnosticMessageText(diagnostic.messageText, " ");
+    console.error(`${path.relative(ROOT, file)}:${line + 1}:${character + 1} ${message}`);
+  }
 }
 
-if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
-  process.exit(main(process.argv.slice(2)));
+if (failing > 0) {
+  console.error(`\n${failing} of ${files.length} file(s) failed to parse.`);
+  process.exit(1);
 }
+
+console.log(`${files.length} file(s) parsed successfully.`);

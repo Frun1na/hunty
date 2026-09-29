@@ -378,7 +378,7 @@ export const QRScanner: React.FC<QRScannerProps> = ({
         barcodeScannerSettings={{
           barcodeTypes: ['qr'],
         }}
-        torch={torchOn ? 'on' : 'off'}
+        enableTorch={torchOn}
       />
 
       <View style={styles.overlay}>

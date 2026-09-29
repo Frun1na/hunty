@@ -1,12 +1,11 @@
+import { huntSponsorBodySchema } from "@hunty/types/api-schemas";
 import { NextResponse } from "next/server";
 import { z } from "zod";
 
+import { NotFoundError,ValidationError } from "@/lib/api/errors";
 import { withValidation } from "@/lib/api/withValidation";
-import { AuthError, ForbiddenError, ValidationError, NotFoundError } from "@/lib/api/errors";
-import { huntSponsorBodySchema } from "@hunty/types/api-schemas";
-import { getIP, rateLimit, rateLimitPresets, rateLimitResponse } from "@/lib/rate-limit";
 import { logger } from "@/lib/logger";
-import { verifySignedMessage } from "@/lib/signature";
+import { getIP, rateLimit, rateLimitPresets, rateLimitResponse } from "@/lib/rate-limit";
 
 const paramsSchema = z.object({ id: z.string() });
 

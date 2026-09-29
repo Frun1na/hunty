@@ -23,8 +23,7 @@
     "storybook": "pnpm storybook --workspace @hunty/web",
     "build-storybook": "pnpm build-storybook --workspace @hunty/web",
     "clean": "turbo run clean",
-    "check:ts-parse": "node scripts/check-ts-parse.mjs",
-    "test:scripts": "node --test \"scripts/__tests__/*.test.mjs\"",
+    "check:workspace-config": "node scripts/check-workspace-config.mjs",
     "prepare": "husky"
   },
   "lint-staged": {
