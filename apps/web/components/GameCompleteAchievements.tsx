@@ -1,6 +1,10 @@
 import { ACHIEVEMENTS } from "@/lib/achievements/config"
 
-export function GameCompleteAchievements({ newAchievements }: { newAchievements: string[] }) {
+interface GameCompleteAchievementsProps {
+  newAchievements: string[]
+}
+
+export function GameCompleteAchievements({ newAchievements }: GameCompleteAchievementsProps) {
   if (newAchievements.length === 0) return null
 
   return (
